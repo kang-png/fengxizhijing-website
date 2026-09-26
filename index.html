@@ -65,8 +65,18 @@
     const statusRefresh=document.getElementById('status-refresh');
     const statusServer=document.getElementById('status-server');
     const serverNames={'30001':'群峦传说 · 1.20.1','40000':'神秘时代 · 1.21.1'};
+    const statusCache=new Map();
+    const rotateButton=document.createElement('button');
+    rotateButton.type='button';rotateButton.className='status-refresh';rotateButton.textContent='暂停轮换';
+    rotateButton.setAttribute('aria-pressed','false');statusCaption.after(rotateButton);
+    let rotationPaused=false;
+    let nextRotation=Date.now()+10000;
+    rotateButton.addEventListener('click',()=>{
+      rotationPaused=!rotationPaused;rotateButton.textContent=rotationPaused?'继续轮换':'暂停轮换';
+      rotateButton.setAttribute('aria-pressed',String(rotationPaused));nextRotation=Date.now()+10000;
+    });
     let statusPending=false;
-    async function refreshStatus(){
+    async function refreshStatus(force=false){
       if(statusPending)return;
       statusPending=true;statusRefresh.disabled=true;statusServer.disabled=true;
       const address='a.mc1.top:'+statusServer.value;
@@ -75,10 +85,15 @@
       if(statusBox.dataset.state==='loading')statusLabel.textContent='正在查询状态…';
       const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),9000);
       try{
-        const response=await fetch('https://api.mcstatus.io/v2/status/java/'+address+'?query=false&timeout=5',{signal:controller.signal,cache:'no-store'});
-        if(!response.ok)throw new Error('状态接口暂不可用');
-        const data=await response.json();
-        if(typeof data.online!=='boolean')throw new Error('状态数据无效');
+        const cached=statusCache.get(address);
+        let data=cached?.data;
+        if(force||!cached||Date.now()-cached.time>=90000){
+          const response=await fetch('https://api.mcstatus.io/v2/status/java/'+address+'?query=false&timeout=5',{signal:controller.signal,cache:'no-store'});
+          if(!response.ok)throw new Error('状态接口暂不可用');
+          data=await response.json();
+          if(typeof data.online!=='boolean')throw new Error('状态数据无效');
+          statusCache.set(address,{data,time:Date.now()});
+        }
         statusBox.dataset.state=data.online?'online':'offline';
         statusLabel.textContent=data.online?'服务器在线':'服务器暂时离线';
         const count=Number(data.players?.online);const max=Number(data.players?.max);
@@ -86,16 +101,28 @@
         const motd=typeof data.motd?.clean==='string'?data.motd.clean.trim():'';
         statusMotd.textContent=data.online?(motd.slice(0,180)||'服务器已经在线，可以进服啦。'):'服务器暂时没有回应，过会儿再看看。';
         statusIcon.src=data.online&&typeof data.icon==='string'&&data.icon.startsWith('data:image/png;base64,')&&data.icon.length<100000?data.icon:'assets/server-icon.png';
-        statusCaption.textContent='状态约每分钟更新一次';
+        statusCaption.textContent='每 10 秒轮换 · 状态每 90 秒更新，可手动刷新';
       }catch{
         statusBox.dataset.state='unknown';statusLabel.textContent='暂时查不到状态';statusCount.textContent='—';
         statusMotd.textContent='可以手动刷新，或直接尝试进服。';statusIcon.src='assets/server-icon.png';
         statusCaption.textContent='可以稍后刷新，或直接尝试进服';
       }finally{clearTimeout(timer);statusPending=false;statusRefresh.disabled=false;statusServer.disabled=false}
     }
-    statusRefresh.addEventListener('click',refreshStatus);
-    statusServer.addEventListener('change',()=>{statusBox.dataset.state='loading';statusCount.textContent='—';statusMotd.textContent='正在读取服务器介绍。';refreshStatus()});
+    function switchStatus(){
+      nextRotation=Date.now()+10000;statusBox.dataset.state='loading';statusCount.textContent='—';
+      statusMotd.textContent='正在读取服务器介绍。';statusIcon.src='assets/server-icon.png';refreshStatus();
+    }
+    statusRefresh.addEventListener('click',()=>{nextRotation=Date.now()+10000;refreshStatus(true)});
+    statusServer.addEventListener('change',switchStatus);
     refreshStatus();
+    setInterval(()=>{
+      if(document.hidden||rotationPaused||statusPending||statusBox.matches(':hover')||statusBox.contains(document.activeElement)){
+        nextRotation=Date.now()+10000;return;
+      }
+      if(Date.now()<nextRotation)return;
+      statusServer.selectedIndex=(statusServer.selectedIndex+1)%statusServer.options.length;
+      switchStatus();
+    },1000);
     setInterval(()=>{if(!document.hidden)refreshStatus()},90000);
     const dialog=document.getElementById('photo-dialog');document.querySelectorAll('[data-full]').forEach(button=>button.addEventListener('click',()=>{dialog.querySelector('img').src=button.dataset.full;dialog.showModal()}));dialog.querySelector('.dialog-close').addEventListener('click',()=>dialog.close());dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close()});
   </script>
